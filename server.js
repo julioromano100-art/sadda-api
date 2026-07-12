@@ -90,7 +90,7 @@ app.post('/api/registrarAsistencia', async (req, res) => {
     if (tipo === "ENTRADA") {
       await googleSheets.spreadsheets.values.append({
         spreadsheetId: spreadsheetId,
-        range: 'asistencia!A:D',
+        range: 'asistencia!A:G',
         valueInputOption: 'USER_ENTERED',
         resource: { values: [[nombre, dni, horaFormateada, ""]] }, // Deja la columna D (Salida) vacía
       });
