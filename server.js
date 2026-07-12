@@ -11,11 +11,21 @@ app.use(express.json());
 // ==========================================
 // 1. CONFIGURACIÓN DE AUTENTICACIÓN
 // ==========================================
-// Lee tu llave maestra. El archivo credenciales.json debe estar en la misma carpeta.
-const auth = new google.auth.GoogleAuth({
-  keyFile: './credenciales.json',
-  scopes: ['https://www.googleapis.com/auth/spreadsheets']
-});
+let auth;
+
+// Si existe la variable en Render, la usamos. Si no, usamos el archivo local.
+if (process.env.CRED_JSON_CONTENT) {
+  auth = new google.auth.GoogleAuth({
+    credentials: JSON.parse(process.env.CRED_JSON_CONTENT),
+    scopes: ['https://www.googleapis.com/auth/spreadsheets']
+  });
+} else {
+  // En tu PC, como no existe la variable, entrará por este 'else' y leerá el archivo
+  auth = new google.auth.GoogleAuth({
+    keyFile: './credenciales.json',
+    scopes: ['https://www.googleapis.com/auth/spreadsheets']
+  });
+}
 
 // ==========================================
 // 2. ENDPOINT: BUSCAR DNI
