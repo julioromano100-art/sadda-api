@@ -1,0 +1,11 @@
+{
+  "name": "sadda-backend",
+  "version": "2.0.0",
+  "description": "API central para el Sistema de Asistencia Dinámica Digital Automática",
+  "main": "server.js",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "googleapis": "^126.0.1"
+  }
+}
