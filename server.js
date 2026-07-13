@@ -88,12 +88,13 @@ app.post('/api/buscarDni', async (req, res) => {
   }
 });
 
-// NUEVO ENDPOINT: LOGIN DE ADMIN (Columna A = Clave, Columna B = Usuario)
+// LOGIN DE ADMIN REPARADO Y OPTIMIZADO
 app.post('/api/loginAdmin', async (req, res) => {
   try {
     const { usuario, clave, spreadsheetId, tabName } = req.body;
     
     if (!spreadsheetId) return res.status(400).json({ status: "error", msg: "Falta spreadsheetId" });
+    if (!usuario || !clave) return res.status(400).json({ status: "error", msg: "Faltan credenciales" });
 
     const hoja = tabName || 'IDusuario';
     const client = await auth.getClient();
@@ -107,12 +108,18 @@ app.post('/api/loginAdmin', async (req, res) => {
     const filas = respuesta.data.values;
     if (!filas) return res.json({ status: "error", msg: "La hoja de usuarios está vacía." });
 
-    const adminEncontrado = filas.find(fila => 
-      fila[1] && String(fila[1]).trim() === String(usuario).trim() && 
-      fila[0] && String(fila[0]).trim() === String(clave).trim()
-    );
+    // Búsqueda a prueba de fallos (ignora mayúsculas/minúsculas en el usuario y evita errores de columnas vacías)
+    const inputUsuario = String(usuario).trim().toLowerCase();
+    const inputClave = String(clave).trim();
+
+    const adminEncontrado = filas.find(fila => {
+      const sheetClave = fila[0] ? String(fila[0]).trim() : "";
+      const sheetUsuario = fila[1] ? String(fila[1]).trim().toLowerCase() : "";
+      return sheetClave === inputClave && sheetUsuario === inputUsuario;
+    });
 
     if (adminEncontrado) {
+      // Si la columna C existe toma ese nombre, sino usa el usuario de la columna B
       const nombreAdmin = adminEncontrado[2] ? adminEncontrado[2].trim() : adminEncontrado[1].trim();
       res.json({ status: "success", data: { nombre: nombreAdmin } });
     } else {
@@ -156,26 +163,33 @@ app.post('/api/registrarAsistencia', async (req, res) => {
 
     const ahora = new Date();
     const fechaArgentina = ahora.toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit', year: 'numeric' });
-    const horaArgentina = ahora.toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const horaArgentina = ahora.toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour: '2-digit', minute: '2-digit' });
+    
+    // Combinamos Fecha y Hora en una sola variable para inyectarla en la columna D y E
+    const fechaHoraActual = `${fechaArgentina} ${horaArgentina}`;
 
     if (tipo === "ENTRADA") {
       await googleSheets.spreadsheets.values.append({
         spreadsheetId,
-        range: `${hoja}!A:Z`,
+        range: `${hoja}!A:F`, // Columnas A hasta F
         valueInputOption: 'USER_ENTERED',
-        resource: { values: [[fechaArgentina, nombre, dni, evento || "", horaArgentina, "", ""]] },
+        // A:Evento, B:Nombre, C:DNI, D:Entrada(Fecha y Hora), E:Salida(vacía), F:Duracion(vacía)
+        resource: { values: [[evento || "Evento General", nombre, dni, fechaHoraActual, "", ""]] },
       });
       return res.json({ status: "success", msg: "Entrada registrada a las " + horaArgentina });
     } 
 
     if (tipo === "SALIDA") {
-      const lectura = await googleSheets.spreadsheets.values.get({ spreadsheetId, range: `${hoja}!A:Z` });
+      const lectura = await googleSheets.spreadsheets.values.get({ spreadsheetId, range: `${hoja}!A:F` });
       const filas = lectura.data.values;
       let filaEncontrada = -1;
       
+      // Recorremos de abajo hacia arriba para buscar la última entrada de ese DNI
       for (let i = filas.length - 1; i > 0; i--) {
-        if (filas[i][2] && String(filas[i][2]).trim() === String(dni).trim()) {
-          filaEncontrada = i + 1;
+        // Col C es índice 2 (DNI). Verificamos que coincida el DNI.
+        // Col E es índice 4 (Salida). Verificamos que esté vacía para no pisar salidas ya registradas.
+        if (filas[i][2] && String(filas[i][2]).trim() === String(dni).trim() && !filas[i][4]) {
+          filaEncontrada = i + 1; // +1 porque los arrays empiezan en 0 y las hojas en 1
           break;
         }
       }
@@ -183,16 +197,18 @@ app.post('/api/registrarAsistencia', async (req, res) => {
       if (filaEncontrada !== -1) {
         await googleSheets.spreadsheets.values.update({
           spreadsheetId,
-          range: `${hoja}!F${filaEncontrada}:G${filaEncontrada}`,
+          // Actualizamos específicamente la columna E (Salida) y F (Duración)
+          range: `${hoja}!E${filaEncontrada}:F${filaEncontrada}`,
           valueInputOption: 'USER_ENTERED',
-          resource: { values: [[horaArgentina, duracion]] },
+          resource: { values: [[fechaHoraActual, duracion]] },
         });
         return res.json({ status: "success", msg: "Salida registrada a las " + horaArgentina });
       } else {
-        return res.json({ status: "error", msg: "No se encontró ENTRADA previa hoy." });
+        return res.json({ status: "error", msg: "No se encontró ENTRADA previa pendiente de cierre." });
       }
     }
   } catch (error) {
+    console.error("Error en registrarAsistencia:", error);
     res.status(500).json({ status: "error", msg: "Error al registrar en la planilla." });
   }
 });
