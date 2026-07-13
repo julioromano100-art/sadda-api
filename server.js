@@ -88,6 +88,53 @@ app.post('/api/buscarDni', async (req, res) => {
     res.status(500).json({ status: "error", msg: "Error del servidor." });
   }
 });
+// =================================================================
+// ENDPOINTS admin
+// =================================================================
+
+// 👇 ¡PEGALO ACÁ MISMÓ (JUSTO AQUÍ)! 👇
+app.post('/api/loginAdmin', async (req, res) => {
+  try {
+    const { usuario, clave, spreadsheetId, tabName } = req.body;
+    
+    if (!spreadsheetId) return res.status(400).json({ status: "error", msg: "Falta spreadsheetId" });
+
+    const hoja = tabName || 'IDusuario';
+    const client = await auth.getClient();
+    const googleSheets = google.sheets({ version: 'v4', auth: client });
+    
+    // Leemos las columnas A, B y C por si tenés el Nombre en la C
+    const respuesta = await googleSheets.spreadsheets.values.get({ 
+      spreadsheetId, 
+      range: `${hoja}!A:C` 
+    });
+
+    const filas = respuesta.data.values;
+    if (!filas) return res.json({ status: "error", msg: "La hoja de usuarios está vacía." });
+
+    // Columna A es Clave (fila[0]) y Columna B es Usuario (fila[1])
+    const adminEncontrado = filas.find(fila => 
+      fila[1] && String(fila[1]).trim() === String(usuario).trim() && 
+      fila[0] && String(fila[0]).trim() === String(clave).trim()
+    );
+
+    if (adminEncontrado) {
+      // Si pusiste el nombre real en la columna C lo usa, si no, usa el usuario de la B
+      const nombreAdmin = adminEncontrado[2] ? adminEncontrado[2].trim() : adminEncontrado[1].trim();
+      res.json({ status: "success", data: { nombre: nombreAdmin } });
+    } else {
+      res.json({ status: "error", msg: "Usuario o clave incorrectos." });
+    }
+  } catch (error) {
+    console.error("Error en loginAdmin:", error);
+    res.status(500).json({ status: "error", msg: "Error de servidor al validar login." });
+  }
+});
+
+// El código sigue normal con tus otros endpoints...
+app.post('/api/validarEscaneo', (req, res) => {
+  try {
+    const { qrData, lat, lon } = req.body;
 
 app.post('/api/validarEscaneo', (req, res) => {
   try {
