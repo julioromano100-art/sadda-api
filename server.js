@@ -24,7 +24,7 @@ try {
 }
 
 // =================================================================
-// HERRAMIENTAS MATEMÁTICAS (Ahora extrae el evento del QR)
+// HERRAMIENTAS MATEMÁTICAS
 // =================================================================
 const descifrarCoordenadas = (textoHex, clave) => {
   let textoOriginal = "";
@@ -35,7 +35,6 @@ const descifrarCoordenadas = (textoHex, clave) => {
     textoOriginal += String.fromCharCode(charCode ^ charClave);
   }
   
-  // Extraemos lat, lon y ahora también el nombre del evento si viene en el QR
   let partes = textoOriginal.split(",");
   return { 
     lat: parseFloat(partes[0]), 
@@ -88,11 +87,8 @@ app.post('/api/buscarDni', async (req, res) => {
     res.status(500).json({ status: "error", msg: "Error del servidor." });
   }
 });
-// =================================================================
-// ENDPOINTS admin
-// =================================================================
 
-// 👇 ¡PEGALO ACÁ MISMÓ (JUSTO AQUÍ)! 👇
+// NUEVO ENDPOINT: LOGIN DE ADMIN (Columna A = Clave, Columna B = Usuario)
 app.post('/api/loginAdmin', async (req, res) => {
   try {
     const { usuario, clave, spreadsheetId, tabName } = req.body;
@@ -103,7 +99,6 @@ app.post('/api/loginAdmin', async (req, res) => {
     const client = await auth.getClient();
     const googleSheets = google.sheets({ version: 'v4', auth: client });
     
-    // Leemos las columnas A, B y C por si tenés el Nombre en la C
     const respuesta = await googleSheets.spreadsheets.values.get({ 
       spreadsheetId, 
       range: `${hoja}!A:C` 
@@ -112,14 +107,12 @@ app.post('/api/loginAdmin', async (req, res) => {
     const filas = respuesta.data.values;
     if (!filas) return res.json({ status: "error", msg: "La hoja de usuarios está vacía." });
 
-    // Columna A es Clave (fila[0]) y Columna B es Usuario (fila[1])
     const adminEncontrado = filas.find(fila => 
       fila[1] && String(fila[1]).trim() === String(usuario).trim() && 
       fila[0] && String(fila[0]).trim() === String(clave).trim()
     );
 
     if (adminEncontrado) {
-      // Si pusiste el nombre real en la columna C lo usa, si no, usa el usuario de la B
       const nombreAdmin = adminEncontrado[2] ? adminEncontrado[2].trim() : adminEncontrado[1].trim();
       res.json({ status: "success", data: { nombre: nombreAdmin } });
     } else {
@@ -130,11 +123,6 @@ app.post('/api/loginAdmin', async (req, res) => {
     res.status(500).json({ status: "error", msg: "Error de servidor al validar login." });
   }
 });
-
-// El código sigue normal con tus otros endpoints...
-app.post('/api/validarEscaneo', (req, res) => {
-  try {
-    const { qrData, lat, lon } = req.body;
 
 app.post('/api/validarEscaneo', (req, res) => {
   try {
@@ -151,7 +139,6 @@ app.post('/api/validarEscaneo', (req, res) => {
       return res.json({ status: "error", msg: `Fuera de rango. Distancia: ${Math.round(distancia)}m (Máx 100m).` });
     }
 
-    // Devolvemos el evento que extrajimos de la fórmula matemática
     res.json({ status: "success", data: { evento: coordenadasQR.evento } });
   } catch (err) {
     res.json({ status: "error", msg: "Error de descifrado." });
@@ -160,7 +147,6 @@ app.post('/api/validarEscaneo', (req, res) => {
 
 app.post('/api/registrarAsistencia', async (req, res) => {
   try {
-    // Ahora recibimos evento y duracion desde la app
     const { tipo, dni, nombre, evento, duracion, spreadsheetId, tabName } = req.body;
     if (!spreadsheetId) return res.status(400).json({ status: "error", msg: "Falta spreadsheetId" });
 
@@ -175,9 +161,8 @@ app.post('/api/registrarAsistencia', async (req, res) => {
     if (tipo === "ENTRADA") {
       await googleSheets.spreadsheets.values.append({
         spreadsheetId,
-        range: `${hoja}!A:Z`, // Rango ampliado
+        range: `${hoja}!A:Z`,
         valueInputOption: 'USER_ENTERED',
-        // Columnas: A:Fecha, B:Nombre, C:DNI, D:Evento, E:Entrada, F:Salida(vacía), G:Duracion(vacía)
         resource: { values: [[fechaArgentina, nombre, dni, evento || "", horaArgentina, "", ""]] },
       });
       return res.json({ status: "success", msg: "Entrada registrada a las " + horaArgentina });
@@ -188,7 +173,6 @@ app.post('/api/registrarAsistencia', async (req, res) => {
       const filas = lectura.data.values;
       let filaEncontrada = -1;
       
-      // Como DNI está en la columna C, el índice en el array es 2
       for (let i = filas.length - 1; i > 0; i--) {
         if (filas[i][2] && String(filas[i][2]).trim() === String(dni).trim()) {
           filaEncontrada = i + 1;
@@ -199,7 +183,6 @@ app.post('/api/registrarAsistencia', async (req, res) => {
       if (filaEncontrada !== -1) {
         await googleSheets.spreadsheets.values.update({
           spreadsheetId,
-          // Actualizamos la columna F (Hora Salida) y G (Duración)
           range: `${hoja}!F${filaEncontrada}:G${filaEncontrada}`,
           valueInputOption: 'USER_ENTERED',
           resource: { values: [[horaArgentina, duracion]] },
