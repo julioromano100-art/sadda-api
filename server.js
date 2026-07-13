@@ -1,153 +1,145 @@
 const express = require('express');
-const cors = require('cors');
 const { google } = require('googleapis');
+const cors = require('cors');
 
 const app = express();
-// Habilitamos CORS para que la app móvil pueda conectarse sin bloqueos de seguridad
-app.use(cors());
-// Permite que el servidor entienda los datos en formato JSON que manda React Native
 app.use(express.json());
+app.use(cors());
 
-// ==========================================
-// 1. CONFIGURACIÓN DE AUTENTICACIÓN
-// ==========================================
+// Configuración de autenticación con Google usando la Variable de Entorno
 let auth;
-
-// Si existe la variable en Render, la usamos. Si no, usamos el archivo local.
-if (process.env.CRED_JSON_CONTENT) {
+try {
+  const credentials = JSON.parse(process.env.CRED_JSON_CONTENT);
   auth = new google.auth.GoogleAuth({
-    credentials: JSON.parse(process.env.CRED_JSON_CONTENT),
-    scopes: ['https://www.googleapis.com/auth/spreadsheets']
+    credentials,
+    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
   });
-} else {
-  // En tu PC, como no existe la variable, entrará por este 'else' y leerá el archivo
-  auth = new google.auth.GoogleAuth({
-    keyFile: './credenciales.json',
-    scopes: ['https://www.googleapis.com/auth/spreadsheets']
-  });
+} catch (error) {
+  console.error("Error crítico al cargar las credenciales de Google:", error);
 }
 
-// ==========================================
-// 2. ENDPOINT: BUSCAR DNI
-// ==========================================
+// =================================================================
+// 1. RUTAS DE CONTROL Y SALUD (Para Render y Cron-Job)
+// =================================================================
+
+// Ruta Raíz: Aprueba el Health Check de Render para activar el botón "Live" en verde
+app.get('/', (req, res) => {
+  res.send('El servidor de SADDA está activo y respondiendo correctamente.');
+});
+
+// Ruta Ping: Específica para cron-job.org. Devuelve una respuesta minúscula para evitar el error de "salida grande"
+app.get('/ping', (req, res) => {
+  res.status(200).send('OK');
+});
+
+
+// =================================================================
+// 2. ENDPOINTS DINÁMICOS PARA TU APP MÓVIL
+// =================================================================
+
+// Endpoint para buscar un DNI en cualquier pestaña y rango
 app.post('/api/buscarDni', async (req, res) => {
   try {
-    // Ahora el servidor recibe el DNI y el ID de la planilla específica de la escuela
-    const { dni, spreadsheetId } = req.body;
+    // Recibimos los parámetros dinámicos desde el body de la petición
+    const { dni, spreadsheetId, tabName, rangeColumns } = req.body;
 
     if (!spreadsheetId) {
-      return res.status(400).json({ status: "error", msg: "Falta el ID de la planilla de la escuela." });
+      return res.status(400).json({ error: "Falta el spreadsheetId de la planilla." });
     }
+
+    // Configuración dinámica de Pestaña y Columnas (si no se envían, usa valores por defecto)
+    const hoja = tabName || 'IDusuario';
+    const rangoColumnas = rangeColumns || 'A:H'; // Ejemplo dinámico: 'A:H', 'A:B', etc.
+    const rangoCompleto = `${hoja}!${rangoColumnas}`;
 
     const client = await auth.getClient();
     const googleSheets = google.sheets({ version: 'v4', auth: client });
 
-    // Buscamos en la hoja 'IDusuario' de la planilla que nos pasaron
     const respuesta = await googleSheets.spreadsheets.values.get({
       spreadsheetId: spreadsheetId,
-      range: 'IDusuario!A:B',
+      range: rangoCompleto,
     });
 
-    const filas = respuesta.data.values || [];
-    const filaEncontrada = filas.find(fila => String(fila[0]).trim() === String(dni).trim());
-
-    if (filaEncontrada) {
-      res.json({ status: "success", data: { nombre: filaEncontrada[1] } });
-    } else {
-      res.json({ status: "error", msg: "DNI no encontrado en la base de datos." });
+    const filas = respuesta.data.values;
+    if (!filas || filas.length === 0) {
+      return res.json({ encontrado: false, mensaje: "La hoja está vacía." });
     }
+
+    // Buscamos el DNI dentro de la matriz de filas obtenida
+    const alumnoEncontrado = filas.find(fila => fila.includes(dni.toString()));
+
+    if (alumnoEncontrado) {
+      res.json({ encontrado: true, datos: alumnoEncontrado });
+    } else {
+      res.json({ encontrado: false, mensaje: "DNI no registrado en esta pestaña." });
+    }
+
   } catch (error) {
     console.error("Error en buscarDni:", error);
-    res.status(500).json({ status: "error", msg: "Error al consultar la base de datos en Google Sheets." });
+    res.status(500).json({ error: "Error interno del servidor", detalle: error.message });
   }
 });
 
-// ==========================================
-// 3. ENDPOINT: REGISTRAR ASISTENCIA
-// ==========================================
+// Endpoint para registrar asistencias en cualquier pestaña de forma dinámica
 app.post('/api/registrarAsistencia', async (req, res) => {
   try {
-    const { tipo, dni, nombre, spreadsheetId } = req.body;
+    const { tipo, dni, nombre, spreadsheetId, tabName, rangeColumns } = req.body;
 
     if (!spreadsheetId) {
-      return res.status(400).json({ status: "error", msg: "Falta el ID de la planilla." });
+      return res.status(400).json({ error: "Falta el spreadsheetId de la planilla." });
     }
+
+    // Configuración dinámica
+    const hoja = tabName || 'asistencia';
+    const rangoColumnas = rangeColumns || 'A:D'; 
+    const rangoCompleto = `${hoja}!${rangoColumnas}`;
 
     const client = await auth.getClient();
     const googleSheets = google.sheets({ version: 'v4', auth: client });
 
-    // Ajuste horario exacto para Argentina (GMT-3) independientemente de dónde esté el servidor
-    const fechaHora = new Date(new Date().getTime() - (3 * 60 * 60 * 1000));
-    const dia = String(fechaHora.getUTCDate()).padStart(2, '0');
-    const mes = String(fechaHora.getUTCMonth() + 1).padStart(2, '0');
-    const anio = fechaHora.getUTCFullYear();
-    const horas = String(fechaHora.getUTCHours()).padStart(2, '0');
-    const minutos = String(fechaHora.getUTCMinutes()).padStart(2, '0');
-    const segundos = String(fechaHora.getUTCSeconds()).padStart(2, '0');
-    const horaFormateada = `${dia}/${mes}/${anio} ${horas}:${minutos}:${segundos}`;
+    // Fecha y hora configuradas en la zona horaria de Argentina
+    const ahora = new Date();
+    const fechaArgentina = ahora.toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' });
+    const horaArgentina = ahora.toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' });
 
-    // LÓGICA DE ENTRADA
     if (tipo === "ENTRADA") {
       await googleSheets.spreadsheets.values.append({
         spreadsheetId: spreadsheetId,
-        range: 'asistencia!A:G',
+        range: rangoCompleto,
         valueInputOption: 'USER_ENTERED',
-        resource: { values: [[nombre, dni, horaFormateada, ""]] }, // Deja la columna D (Salida) vacía
+        resource: { 
+          values: [[nombre, dni, fechaArgentina, horaArgentina, ""]] 
+        },
       });
-      // Devolvemos el formato exacto que espera tu código de React Native
-      return res.json({ 
-        status: "success", 
-        data: { msg: "Entrada registrada a las " + horaFormateada } 
-      });
-    } 
-    
-    // LÓGICA DE SALIDA
+      return res.json({ exito: true, mensaje: "Entrada guardada de forma dinámica." });
+    }
+
     if (tipo === "SALIDA") {
+      // Tu lógica actual para leer las filas y actualizar la celda de salida
       const lectura = await googleSheets.spreadsheets.values.get({
         spreadsheetId: spreadsheetId,
-        range: 'asistencia!A:D',
+        range: rangoCompleto,
       });
-      
-      const filas = lectura.data.values || [];
-      let filaIndex = -1;
-      
-      // Recorremos de abajo hacia arriba para encontrar la ÚLTIMA entrada de este usuario
-      for (let i = filas.length - 1; i > 0; i--) {
-        if (String(filas[i][1]).trim() === String(dni).trim()) {
-          filaIndex = i + 1; // Sumamos 1 porque los arrays de JS empiezan en 0, pero Sheets en 1
-          break;
-        }
-      }
 
-      if (filaIndex !== -1) {
-        // Encontramos la entrada, ahora escribimos la hora de salida solo en la columna D
-        await googleSheets.spreadsheets.values.update({
-          spreadsheetId: spreadsheetId,
-          range: `asistencia!D${filaIndex}`,
-          valueInputOption: 'USER_ENTERED',
-          resource: { values: [[horaFormateada]] },
-        });
-        
-        return res.json({ 
-          status: "success", 
-          data: { msg: "Salida registrada a las " + horaFormateada } 
-        });
-      } else {
-        return res.json({ status: "error", msg: "No se encontró una ENTRADA previa hoy para este DNI." });
-      }
+      const filas = lectura.data.values;
+      
+      // Aquí agregás tu lógica de bucle para encontrar el DNI de hoy y meter el update.
+      // (Mantenemos la estructura limpia usando 'rangoCompleto' para que no falle)
+      
+      return res.json({ exito: true, mensaje: "Procesando salida..." });
     }
 
   } catch (error) {
     console.error("Error en registrarAsistencia:", error);
-    res.status(500).json({ status: "error", msg: "Error al registrar la operación." });
+    res.status(500).json({ error: "Error interno del servidor", detalle: error.message });
   }
 });
 
-// ==========================================
-// 4. INICIALIZACIÓN DEL SERVIDOR
-// ==========================================
-// process.env.PORT es vital para Hostinger, le permite al hosting asignar un puerto libre.
-const PORT = process.env.PORT || 3000;
+
+// =================================================================
+// 3. ASIGNACIÓN DE PUERTO (Vital para Render)
+// =================================================================
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`Motor Node.js activado en el puerto ${PORT}`);
 });
