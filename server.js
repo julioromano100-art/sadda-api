@@ -88,13 +88,17 @@ app.post('/api/buscarDni', async (req, res) => {
   }
 });
 
-// LOGIN DE ADMIN REPARADO Y OPTIMIZADO
+// LOGIN DE ADMIN OPTIMIZADO (Columna A = Clave, Columna B = Usuario, Columna C = Nombre)
 app.post('/api/loginAdmin', async (req, res) => {
   try {
     const { usuario, clave, spreadsheetId, tabName } = req.body;
     
-    if (!spreadsheetId) return res.status(400).json({ status: "error", msg: "Falta spreadsheetId" });
-    if (!usuario || !clave) return res.status(400).json({ status: "error", msg: "Faltan credenciales" });
+    if (!spreadsheetId) {
+      return res.status(400).json({ status: "error", msg: "Falta el spreadsheetId en el cuerpo del JSON." });
+    }
+    if (!usuario || !clave) {
+      return res.status(400).json({ status: "error", msg: "Falta el usuario o la clave. Asegurate de enviar las propiedades correctas." });
+    }
 
     const hoja = tabName || 'IDusuario';
     const client = await auth.getClient();
@@ -108,18 +112,17 @@ app.post('/api/loginAdmin', async (req, res) => {
     const filas = respuesta.data.values;
     if (!filas) return res.json({ status: "error", msg: "La hoja de usuarios está vacía." });
 
-    // Búsqueda a prueba de fallos (ignora mayúsculas/minúsculas en el usuario y evita errores de columnas vacías)
     const inputUsuario = String(usuario).trim().toLowerCase();
     const inputClave = String(clave).trim();
 
+    // Búsqueda robusta ignorando mayúsculas/minúsculas y celdas vacías
     const adminEncontrado = filas.find(fila => {
-      const sheetClave = fila[0] ? String(fila[0]).trim() : "";
-      const sheetUsuario = fila[1] ? String(fila[1]).trim().toLowerCase() : "";
-      return sheetClave === inputClave && sheetUsuario === inputUsuario;
+      const celdaClave = fila[0] ? String(fila[0]).trim() : "";
+      const celdaUsuario = fila[1] ? String(fila[1]).trim().toLowerCase() : "";
+      return celdaUsuario === inputUsuario && celdaClave === inputClave;
     });
 
     if (adminEncontrado) {
-      // Si la columna C existe toma ese nombre, sino usa el usuario de la columna B
       const nombreAdmin = adminEncontrado[2] ? adminEncontrado[2].trim() : adminEncontrado[1].trim();
       res.json({ status: "success", data: { nombre: nombreAdmin } });
     } else {
@@ -127,7 +130,7 @@ app.post('/api/loginAdmin', async (req, res) => {
     }
   } catch (error) {
     console.error("Error en loginAdmin:", error);
-    res.status(500).json({ status: "error", msg: "Error de servidor al validar login." });
+    res.status(500).json({ status: "error", msg: "Error de servidor al validar login admin." });
   }
 });
 
@@ -152,6 +155,7 @@ app.post('/api/validarEscaneo', (req, res) => {
   }
 });
 
+// REGISTRO DE ASISTENCIA REESTRUCTURADO (A=Evento, B=Nombre, C=DNI, D=Entrada, E=Salida, F=Duración)
 app.post('/api/registrarAsistencia', async (req, res) => {
   try {
     const { tipo, dni, nombre, evento, duracion, spreadsheetId, tabName } = req.body;
@@ -165,15 +169,15 @@ app.post('/api/registrarAsistencia', async (req, res) => {
     const fechaArgentina = ahora.toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit', year: 'numeric' });
     const horaArgentina = ahora.toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour: '2-digit', minute: '2-digit' });
     
-    // Combinamos Fecha y Hora en una sola variable para inyectarla en la columna D y E
+    // Unimos fecha y hora en una sola cadena para las columnas de marca temporal
     const fechaHoraActual = `${fechaArgentina} ${horaArgentina}`;
 
     if (tipo === "ENTRADA") {
       await googleSheets.spreadsheets.values.append({
         spreadsheetId,
-        range: `${hoja}!A:F`, // Columnas A hasta F
+        range: `${hoja}!A:F`,
         valueInputOption: 'USER_ENTERED',
-        // A:Evento, B:Nombre, C:DNI, D:Entrada(Fecha y Hora), E:Salida(vacía), F:Duracion(vacía)
+        // Estructura: A=Evento, B=Nombre, C=DNI, D=Entrada, E="", F=""
         resource: { values: [[evento || "Evento General", nombre, dni, fechaHoraActual, "", ""]] },
       });
       return res.json({ status: "success", msg: "Entrada registrada a las " + horaArgentina });
@@ -182,14 +186,18 @@ app.post('/api/registrarAsistencia', async (req, res) => {
     if (tipo === "SALIDA") {
       const lectura = await googleSheets.spreadsheets.values.get({ spreadsheetId, range: `${hoja}!A:F` });
       const filas = lectura.data.values;
+      if (!filas) return res.json({ status: "error", msg: "La hoja de asistencia está vacía." });
+
       let filaEncontrada = -1;
       
-      // Recorremos de abajo hacia arriba para buscar la última entrada de ese DNI
+      // Buscamos de abajo hacia arriba la última entrada sin cerrar de este DNI
       for (let i = filas.length - 1; i > 0; i--) {
-        // Col C es índice 2 (DNI). Verificamos que coincida el DNI.
-        // Col E es índice 4 (Salida). Verificamos que esté vacía para no pisar salidas ya registradas.
-        if (filas[i][2] && String(filas[i][2]).trim() === String(dni).trim() && !filas[i][4]) {
-          filaEncontrada = i + 1; // +1 porque los arrays empiezan en 0 y las hojas en 1
+        const celdaDni = filas[i][2] ? String(filas[i][2]).trim() : "";
+        const celdaSalida = filas[i][4] ? String(filas[i][4]).trim() : "";
+        
+        // Índice 2 es DNI (Columna C). Índice 4 es Salida (Columna E)
+        if (celdaDni === String(dni).trim() && celdaSalida === "") {
+          filaEncontrada = i + 1; // +1 debido a que Sheets empieza en fila 1
           break;
         }
       }
@@ -197,14 +205,14 @@ app.post('/api/registrarAsistencia', async (req, res) => {
       if (filaEncontrada !== -1) {
         await googleSheets.spreadsheets.values.update({
           spreadsheetId,
-          // Actualizamos específicamente la columna E (Salida) y F (Duración)
+          // Actualizamos los campos E (Salida) y F (Duración) de esa fila específica
           range: `${hoja}!E${filaEncontrada}:F${filaEncontrada}`,
           valueInputOption: 'USER_ENTERED',
-          resource: { values: [[fechaHoraActual, duracion]] },
+          resource: { values: [[fechaHoraActual, duracion || ""]] },
         });
         return res.json({ status: "success", msg: "Salida registrada a las " + horaArgentina });
       } else {
-        return res.json({ status: "error", msg: "No se encontró ENTRADA previa pendiente de cierre." });
+        return res.json({ status: "error", msg: "No se encontró una ENTRADA previa abierta para este DNI." });
       }
     }
   } catch (error) {
